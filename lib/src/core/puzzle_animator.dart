@@ -5,21 +5,32 @@
 import 'dart:async';
 import 'dart:math' show Point, Random;
 
+import 'package:ar_flutter_plugin/datatypes/node_types.dart';
+import 'package:ar_flutter_plugin/models/ar_anchor.dart';
+import 'package:ar_flutter_plugin/models/ar_node.dart';
+import 'package:vector_math/vector_math_64.dart';
 import 'body.dart';
 import 'puzzle.dart';
 import 'puzzle_proxy.dart';
 
 class PuzzleAnimator implements PuzzleProxy {
   final _rnd = Random();
-  final List<Body> _locations;
+  List<Body> _locations;
+  List<ARPlaneAnchor> _arPlaneAnchors;
   final _controller = StreamController<PuzzleEvent>();
   bool _nextRandomVertical = true;
   Puzzle _puzzle;
   int _clickCount = 0;
+  Matrix4 _planeHitMatrix;
+  double _zValue;
+  Matrix4 get planeHitMatrix => _planeHitMatrix;
+  List<Body> get locations => _locations;
 
   bool _stable = true;
 
   bool get stable => _stable;
+
+  List<ARPlaneAnchor> get arPlaneAnchors => _arPlaneAnchors;
 
   @override
   bool get solved => _puzzle.incorrectTiles == 0;
@@ -50,16 +61,58 @@ class PuzzleAnimator implements PuzzleProxy {
   @override
   Point<double> location(int index) => _locations[index].location;
 
+  ARNode node(int index) => _locations[index].node;
+  ARPlaneAnchor arPlaneAnchor(int index) => _arPlaneAnchors[index];
+
   int? _lastBadClick;
   int _badClickCount = 0;
 
-  PuzzleAnimator(int width, int height) : this._(Puzzle(width, height));
+  PuzzleAnimator(int width, int height, double zvalue, Matrix4 planeHitMatrix)
+      : this._(Puzzle(width, height), zvalue, planeHitMatrix, []);
 
-  PuzzleAnimator._(this._puzzle)
+  PuzzleAnimator._(
+      this._puzzle, this._zValue, this._planeHitMatrix, this._arPlaneAnchors)
       : _locations = List.generate(_puzzle.length, (i) {
-          return Body.raw(
-              (_puzzle.width - 1.0) / 2, (_puzzle.height - 1.0) / 2, 0, 0);
+          final position = Vector3(
+              (_puzzle.width - 1.0) / 2, (_puzzle.height - 1.0) / 2, _zValue);
+
+          final newNode = ARNode(
+              type: NodeType.webGLB,
+              uri:
+                  'https://github.com/KhronosGroup/glTF-Sample-Models/raw/master/2.0/Duck/glTF-Binary/Duck.glb',
+              scale: Vector3(0.2, 0.2, 0.2),
+              position: Vector3(0, 0, 0),
+              rotation: Vector4(1.0, 0.0, 0.0, 0.0));
+
+          return Body.raw((_puzzle.width - 1.0) / 2, (_puzzle.height - 1.0) / 2,
+              0, 0, newNode);
         });
+
+  Future<void> reGenerateNodes(double zValue, Matrix4 planeHitMatrix) async {
+    _planeHitMatrix = planeHitMatrix;
+    _arPlaneAnchors = [];
+    _locations = List.generate(_puzzle.length, (i) {
+      final position = Vector3(
+          (_puzzle.width - 1.0) / 2, (_puzzle.height - 1.0) / 2, _zValue);
+      final transformation = _planeHitMatrix.clone();
+      // transformation.setEntry(0, 3, position.x);
+      // transformation.setEntry(1, 3, position.y);
+      // transformation.setEntry(2, 3, position.z);
+      final arPlaneAnchor = ARPlaneAnchor(transformation: transformation);
+      _arPlaneAnchors.add(arPlaneAnchor);
+      final newNode = ARNode(
+          type: NodeType.webGLB,
+          name: '$i',
+          uri:
+              'https://github.com/KhronosGroup/glTF-Sample-Models/raw/master/2.0/Duck/glTF-Binary/Duck.glb',
+          scale: Vector3(0.2, 0.2, 0.2),
+          position: Vector3(0, 0, 0),
+          rotation: Vector4(1.0, 0.0, 0.0, 0.0));
+
+      return Body.raw(
+          (_puzzle.width - 1.0) / 2, (_puzzle.height - 1.0) / 2, 0, 0, newNode);
+    });
+  }
 
   void playRandom() {
     if (_puzzle.fitness == 0) {

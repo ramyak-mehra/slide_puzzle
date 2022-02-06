@@ -11,7 +11,7 @@ void main() => runApp(const PuzzleApp());
 class PuzzleApp extends StatelessWidget {
   final int rows, columns;
 
-  const PuzzleApp({this.columns = 4, this.rows = 4});
+  const PuzzleApp({this.columns = 3, this.rows = 3});
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -27,5 +27,5 @@ class _PuzzleHome extends StatefulWidget {
 
   @override
   PuzzleHomeState createState() =>
-      PuzzleHomeState(PuzzleAnimator(_columns, _rows));
+      PuzzleHomeState(PuzzleAnimator(_rows, _columns, 10, Matrix4.zero()));
 }

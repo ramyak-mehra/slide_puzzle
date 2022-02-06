@@ -4,17 +4,28 @@
 
 import 'dart:async';
 
+import 'package:ar_flutter_plugin/ar_flutter_plugin.dart';
+import 'package:ar_flutter_plugin/datatypes/config_planedetection.dart';
+import 'package:ar_flutter_plugin/datatypes/hittest_result_types.dart';
+import 'package:ar_flutter_plugin/datatypes/node_types.dart';
+import 'package:ar_flutter_plugin/managers/ar_anchor_manager.dart';
+import 'package:ar_flutter_plugin/managers/ar_location_manager.dart';
+import 'package:ar_flutter_plugin/managers/ar_object_manager.dart';
+import 'package:ar_flutter_plugin/managers/ar_session_manager.dart';
+import 'package:ar_flutter_plugin/models/ar_anchor.dart';
+import 'package:ar_flutter_plugin/models/ar_hittest_result.dart';
+import 'package:ar_flutter_plugin/models/ar_node.dart';
 import 'package:provider/provider.dart';
-
+import 'package:slide_puzzle/src/theme_ar.dart';
+import 'package:slide_puzzle/src/value_tab_controller.dart';
+import 'package:vector_math/vector_math_64.dart' as vector;
 import 'app_state.dart';
 import 'core/puzzle_animator.dart';
 import 'core/puzzle_proxy.dart';
 import 'flutter.dart';
 import 'puzzle_controls.dart';
-import 'puzzle_flow_delegate.dart';
 import 'shared_theme.dart';
 import 'themes.dart';
-import 'value_tab_controller.dart';
 
 class _PuzzleControls extends ChangeNotifier implements PuzzleControls {
   final PuzzleHomeState _parent;
@@ -51,6 +62,7 @@ class PuzzleHomeState extends State
 
   @override
   final _AnimationNotifier animationNotifier = _AnimationNotifier();
+  bool started = false;
 
   Duration _tickerTimeSinceLastEvent = Duration.zero;
   late Ticker _ticker;
@@ -60,17 +72,35 @@ class PuzzleHomeState extends State
   bool _autoPlay = false;
   late _PuzzleControls _autoPlayListenable;
 
+  late final ARObjectManager arObjectManager;
+  late final ARAnchorManager arAnchorManager;
+  late final ARSessionManager arSessionManager;
+  late final ARViewCreatedCallback onARViewCreated;
+
   PuzzleHomeState(this.puzzle) {
     _puzzleEventSubscription = puzzle.onEvent.listen(_onPuzzleEvent);
   }
 
-  @override
-  void initState() {
-    super.initState();
-    _autoPlayListenable = _PuzzleControls(this);
-    _ticker = createTicker(_onTick);
-    _lastElapsed = Duration.zero;
-    _ensureTicking();
+  void initPuzzle(ARHitTestResult hitTestResult) async {
+    // puzzle = puzzle;
+
+    await puzzle.reGenerateNodes(
+        hitTestResult.distance, hitTestResult.worldTransform);
+
+    // addNodes(hitTestResult);
+    if (!started) {
+      _ticker = createTicker(_onTick);
+      _lastElapsed = Duration.zero;
+      _ensureTicking();
+    }
+  }
+
+  void addNodes(ARHitTestResult hitTestResult) async {
+    final anchor = puzzle.arPlaneAnchors[0];
+    // final anchor = ARPlaneAnchor(transformation: hitTestResult.worldTransform);
+    var newNode = puzzle.node(0);
+    var didAddAnchor = await arAnchorManager.addAnchor(anchor);
+    var result = await arObjectManager.addNode(newNode, planeAnchor: anchor);
   }
 
   void _setAutoPlay(bool? newValue) {
@@ -87,6 +117,60 @@ class PuzzleHomeState extends State
   }
 
   @override
+  void initState() {
+    _autoPlayListenable = _PuzzleControls(this);
+    super.initState();
+    onARViewCreated = arCreate;
+  }
+
+  void arCreate(
+      ARSessionManager arSessionManager,
+      ARObjectManager arObjectManager,
+      ARAnchorManager arAnchorManager,
+      ARLocationManager arLocationManager) {
+    print('creating ar view');
+    this.arSessionManager = arSessionManager;
+    this.arObjectManager = arObjectManager;
+    this.arAnchorManager = arAnchorManager;
+
+    this.arSessionManager.onInitialize(
+          showFeaturePoints: false,
+          showPlanes: true,
+          showWorldOrigin: true,
+          handleTaps: true,
+          handlePans: true,
+          handleRotation: true,
+        );
+    this.arObjectManager.onInitialize();
+    this.arSessionManager.onError('errorMessage');
+    this.arSessionManager.onPlaneOrPointTap = onPlaneOrPointTapped;
+    // this.arObjectManager.onPanStart = onPanStarted;
+    // this.arObjectManager.onPanChange = onPanChanged;
+    // this.arObjectManager.onPanEnd = onPanEnded;
+    this.arObjectManager.onNodeTap = onNodeTap;
+    // this.arObjectManager.onRotationStart = onRotationStarted;
+    // this.arObjectManager.onRotationChange = onRotationChanged;
+    // this.arObjectManager.onRotationEnd = onRotationEnded;
+  }
+
+  void onNodeTap(List<String> nodeNames) {
+    for (final nodeName in nodeNames) {
+      print('node_$nodeName');
+      puzzle.clickOrShake(int.parse(nodeName));
+    }
+  }
+
+  Future<void> onPlaneOrPointTapped(
+      List<ARHitTestResult> hitTestResults) async {
+    final singleHitTestResult = hitTestResults.firstWhere(
+        (hitTestResult) => hitTestResult.type == ARHitTestResultType.plane);
+    initPuzzle(singleHitTestResult);
+    if (started) {
+      print('started');
+    }
+  }
+
+  @override
   Widget build(BuildContext context) => MultiProvider(
         providers: [
           Provider<AppState>.value(value: this),
@@ -94,21 +178,7 @@ class PuzzleHomeState extends State
             value: _autoPlayListenable,
           )
         ],
-        child: Material(
-          child: Stack(
-            children: const <Widget>[
-              SizedBox.expand(
-                child: FittedBox(
-                  fit: BoxFit.cover,
-                  child: Image(
-                    image: AssetImage('asset/seattle.jpg'),
-                  ),
-                ),
-              ),
-              LayoutBuilder(builder: _doBuild),
-            ],
-          ),
-        ),
+        child: const Material(child: LayoutBuilder(builder: _doBuild)),
       );
 
   @override
@@ -117,6 +187,7 @@ class PuzzleHomeState extends State
     _ticker.dispose();
     _autoPlayListenable.dispose();
     _puzzleEventSubscription.cancel();
+    arSessionManager.dispose();
     super.dispose();
   }
 
@@ -126,6 +197,7 @@ class PuzzleHomeState extends State
       _setAutoPlay(false);
     }
     _tickerTimeSinceLastEvent = Duration.zero;
+
     _ensureTicking();
     setState(() {
       // noop
@@ -135,6 +207,9 @@ class PuzzleHomeState extends State
   void _ensureTicking() {
     if (!_ticker.isTicking) {
       _ticker.start();
+      setState(() {
+        started = true;
+      });
     }
   }
 
@@ -174,6 +249,8 @@ class PuzzleHomeState extends State
   }
 }
 
+class Vector3 {}
+
 class _AnimationNotifier extends ChangeNotifier {
   void animate() {
     notifyListeners();
@@ -203,84 +280,153 @@ Widget _doBuildCore(bool small) => ValueTabController<SharedTheme>(
       child: Consumer<SharedTheme>(
         builder: (_, theme, __) => AnimatedContainer(
           duration: puzzleAnimationDuration,
-          color: theme.puzzleThemeBackground,
           child: Center(
             child: theme.styledWrapper(
               small,
-              SizedBox(
-                width: 580,
-                child: Consumer<AppState>(
-                  builder: (context, appState, _) => Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: <Widget>[
-                      Container(
-                        decoration: const BoxDecoration(
-                          border: Border(
-                            bottom: BorderSide(
-                              color: Colors.black26,
-                              width: 1,
-                            ),
-                          ),
-                        ),
-                        margin: const EdgeInsets.symmetric(horizontal: 20),
-                        child: TabBar(
-                          controller: ValueTabController.of(context),
-                          labelPadding: const EdgeInsets.fromLTRB(0, 20, 0, 12),
-                          labelColor: theme.puzzleAccentColor,
-                          indicatorColor: theme.puzzleAccentColor,
-                          indicatorWeight: 1.5,
-                          unselectedLabelColor: Colors.black.withOpacity(0.6),
-                          tabs: themes
-                              .map((st) => Text(
-                                    st.name.toUpperCase(),
-                                    style: const TextStyle(
-                                      letterSpacing: 0.5,
-                                    ),
-                                  ))
-                              .toList(),
-                        ),
-                      ),
-                      Flexible(
-                        child: Container(
-                          padding: const EdgeInsets.all(10),
-                          child: Flow(
-                            delegate: PuzzleFlowDelegate(
-                              small ? const Size(90, 90) : const Size(140, 140),
-                              appState.puzzle,
-                              appState.animationNotifier,
-                            ),
-                            children: List<Widget>.generate(
-                              appState.puzzle.length,
-                              (i) => theme.tileButtonCore(
-                                  i, appState.puzzle, small),
-                            ),
-                          ),
-                        ),
-                      ),
-                      Container(
-                        decoration: const BoxDecoration(
-                          border: Border(
-                            top: BorderSide(color: Colors.black26, width: 1),
-                          ),
-                        ),
-                        padding: const EdgeInsets.only(
-                          left: 10,
-                          bottom: 6,
-                          top: 2,
-                          right: 10,
-                        ),
-                        child: Consumer<PuzzleControls>(
-                          builder: (_, controls, __) =>
-                              Row(children: theme.bottomControls(controls)),
-                        ),
-                      )
-                    ],
+              Stack(
+                children: [
+                  Consumer<AppState>(
+                    builder: (context, appState, _) => ARView(
+                      onARViewCreated: appState.onARViewCreated,
+                      planeDetectionConfig:
+                          PlaneDetectionConfig.horizontalAndVertical,
+                    ),
                   ),
-                ),
+                  Consumer<AppState>(builder: (context, appState, _) {
+                    return Center(
+                      child: Container(
+                        height: 30,
+                        child: ElevatedButton(
+                          child: const Text('start'),
+                          onPressed: () {
+                            (theme as ThemeAr).addNodes(appState, small);
+                          },
+                        ),
+                      ),
+                    );
+                    // return Flexible(
+                    //   child: Container(
+                    //     padding: const EdgeInsets.all(10),
+                    //     child: Flow(
+                    //       delegate: PuzzleFlowDelegate(
+                    //         small ? const Size(90, 90) : const Size(140, 140),
+                    //         appState.puzzle,
+                    //         appState.animationNotifier,
+                    //       ),
+                    //       children: List<Widget>.generate(
+                    //         appState.puzzle.length,
+                    //         (i) =>
+                    //             theme.tileButtonCore(i, appState.puzzle, small),
+                    //       ),
+                    //     ),
+                    //   ),
+                    // );
+                  }),
+                  Align(
+                    alignment: Alignment.bottomCenter,
+                    child: Container(
+                      height: 50,
+                      decoration: const BoxDecoration(
+                        color: Colors.red,
+                        border: Border(
+                          top: BorderSide(color: Colors.black26, width: 1),
+                        ),
+                      ),
+                      padding: const EdgeInsets.only(
+                        left: 10,
+                        bottom: 6,
+                        top: 2,
+                        right: 10,
+                      ),
+                      child: Consumer<PuzzleControls>(
+                        builder: (_, controls, __) =>
+                            Row(children: theme.bottomControls(controls)),
+                      ),
+                    ),
+                  )
+                ],
               ),
             ),
           ),
         ),
       ),
     );
+
+// SizedBox(
+//   width: 580,
+//   child: Consumer<AppState>(
+//     builder: (context, appState, _) => Column(
+//       mainAxisSize: MainAxisSize.min,
+//       crossAxisAlignment: CrossAxisAlignment.center,
+//       children: <Widget>[
+//         Container(
+//           decoration: const BoxDecoration(
+//             border: Border(
+//               bottom: BorderSide(
+//                 color: Colors.black26,
+//                 width: 1,
+//               ),
+//             ),
+//           ),
+//           margin: const EdgeInsets.symmetric(horizontal: 20),
+//           child: TabBar(
+//             controller: ValueTabController.of(context),
+//             labelPadding: const EdgeInsets.fromLTRB(0, 20, 0, 12),
+//             labelColor: theme.puzzleAccentColor,
+//             indicatorColor: theme.puzzleAccentColor,
+//             indicatorWeight: 1.5,
+//             unselectedLabelColor: Colors.black.withOpacity(0.6),
+//             tabs: themes
+//                 .map((st) => Text(
+//                       st.name.toUpperCase(),
+//                       style: const TextStyle(
+//                         letterSpacing: 0.5,
+//                       ),
+//                     ))
+//                 .toList(),
+//           ),
+//         ),
+//         Flexible(
+//           child: Container(
+//             padding: const EdgeInsets.all(10),
+//             child: Flow(
+//               delegate: PuzzleFlowDelegate(
+//                 small ? const Size(90, 90) : const Size(140, 140),
+//                 appState.puzzle,
+//                 appState.animationNotifier,
+//               ),
+//               children: List<Widget>.generate(
+//                 appState.puzzle.length,
+//                 (i) => theme.tileButtonCore(
+//                     i, appState.puzzle, small),
+//               ),
+//             ),
+//           ),
+//         ),
+// Container(
+//   decoration: const BoxDecoration(
+//     border: Border(
+//       top: BorderSide(color: Colors.black26, width: 1),
+//     ),
+//   ),
+//   padding: const EdgeInsets.only(
+//     left: 10,
+//     bottom: 6,
+//     top: 2,
+//     right: 10,
+//   ),
+//   child: Consumer<PuzzleControls>(
+//     builder: (_, controls, __) =>
+//         Row(children: theme.bottomControls(controls)),
+//   ),
+// )
+//                 ],
+//               ),
+//             ),
+//           ),
+//         ),
+//       ),
+//     ),
+//   ),
+// );
+

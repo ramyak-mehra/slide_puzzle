@@ -4,6 +4,9 @@
 
 import 'dart:math' show Point;
 
+import 'package:ar_flutter_plugin/models/ar_anchor.dart';
+import 'package:ar_flutter_plugin/models/ar_node.dart';
+
 const zeroPoint = Point<double>(0, 0);
 
 const _epsilon = 0.0001;
@@ -12,21 +15,39 @@ const _epsilon = 0.0001;
 class Body {
   Point<double> _velocity;
   Point<double> _location;
-
+  ARNode _node;
   Point<double> get velocity => _velocity;
 
   Point<double> get location => _location;
+  ARNode get node => _node;
 
-  Body({Point<double> location = zeroPoint, Point<double> velocity = zeroPoint})
-      : assert(location.magnitude.isFinite),
+  Body({
+    Point<double> location = zeroPoint,
+    Point<double> velocity = zeroPoint,
+    required ARNode node,
+  })  : assert(location.magnitude.isFinite),
         _location = location,
         assert(velocity.magnitude.isFinite),
-        _velocity = velocity;
+        _velocity = velocity,
+        _node = node;
+  factory Body.raw(
+    double x,
+    double y,
+    double vx,
+    double vy,
+    ARNode node,
+  ) =>
+      Body(
+        location: Point(x, y),
+        velocity: Point(vx, vy),
+        node: node,
+      );
 
-  factory Body.raw(double x, double y, double vx, double vy) =>
-      Body(location: Point(x, y), velocity: Point(vx, vy));
-
-  Body clone() => Body(location: _location, velocity: _velocity);
+  Body clone() => Body(
+        location: _location,
+        velocity: _velocity,
+        node: _node,
+      );
 
   /// Add the velocity specified in [delta] to `this`.
   void kick(Point<double> delta) {
@@ -36,6 +57,7 @@ class Body {
 
   /// [drag] must be greater than or equal to zero. It defines the percent of
   /// the previous velocity that is lost every second.
+
   bool animate(double seconds,
       {Point<double> force = zeroPoint,
       double drag = 0,
@@ -74,25 +96,34 @@ class Body {
     if (locationDelta.magnitude > _epsilon ||
         (force.magnitude * seconds) > _epsilon) {
       _location += locationDelta;
+      updateNodeLocation();
       return true;
     } else {
       if (snapTo != null && (_location.distanceTo(snapTo) < _epsilon * 2)) {
         _location = snapTo;
+        updateNodeLocation();
       }
       _velocity = zeroPoint;
       return false;
     }
   }
 
+  void updateNodeLocation() {
+    node.position = node.position.clone()
+      ..x = _location.x
+      ..y = _location.y;
+  }
+
   @override
   String toString() =>
-      'Body @(${_location.x},${_location.y}) ↕(${_velocity.x},${_velocity.y})';
+      'Body name: ${_node.name} @(${_location.x},${_location.y}) ↕(${_velocity.x},${_velocity.y}) ,';
 
   @override
   bool operator ==(Object other) =>
       other is Body &&
       other._location == _location &&
-      other._velocity == _velocity;
+      other._velocity == _velocity &&
+      other._node == _node;
 
   // Since this is a mutable class, a constant value is returned for `hashCode`
   // This ensures values don't get lost in a Hashing data structure.
